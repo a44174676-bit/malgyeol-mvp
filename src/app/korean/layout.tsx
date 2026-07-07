@@ -40,4 +40,3 @@ export default function KoreanLayout({ children }: { children: ReactNode }) {
     </div>
   );
 }
-

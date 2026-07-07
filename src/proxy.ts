@@ -6,6 +6,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const isPublic =
+    pathname.startsWith("/demo") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/portal") ||
     pathname.startsWith("/korean/portal") ||
