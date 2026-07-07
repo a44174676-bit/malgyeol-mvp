@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Patient {
+  id                String             @id @default(cuid())
+  name              String
+  birthYear         Int?
+  gender            String?
+  diagnosis         String
+  memo              String?
+  portalToken       String             @unique @default(cuid())
+  createdAt         DateTime           @default(now())
+  goals             Goal[]
+  sessions          SessionNote[]
+  prescriptions     Prescription[]
+  appointments      Appointment[]
+  submissions       Submission[]
+  articulationTests ArticulationTest[]
+  standardScores    StandardScore[]
+  observations      ObservationEntry[]
+  dysarthriaTests   DysarthriaTest[]
+}
+
+// 구음장애 선별 배터리 (MPT·AMR·SMR·문장·문단 연속 시행)
+model DysarthriaTest {
+  id              String   @id @default(cuid())
+  patientId       String
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date            DateTime @default(now())
+  resultsJson     String // 하위 과제별 비진단 음성지표 [{key,title,kind,metrics,audioPath}]
+  intelligibility Int? // 치료사 말명료도 평정 1-5
+  note            String?
+  aiSummary       String?
+}
+
+// 보호자 관찰 데이터 (특허 단계 ② — 실생활 의사소통 관찰)
+model ObservationEntry {
+  id        String   @id @default(cuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date      DateTime @default(now())
+  fatigue   Int? // 말하기 피로도 0-10
+  selfIntel Int? // 자가 전달 정도 1-5
+  famIntel  Int? // 보호자 이해도 1-5
+  repeatQ   String? // 반복 질문: 없음|가끔|자주
+  phoneCall String? // 전화: 가능|짧게 가능|어려움
+  cough     String? // 사레/기침: 없음|1-2회|자주
+  memo      String?
+}
+
+// 자체 조음·음운 선별검사 시행 기록
+model ArticulationTest {
+  id         String   @id @default(cuid())
+  patientId  String
+  patient    Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date       DateTime @default(now())
+  level      String   @default("WORD") // WORD(낱말) | SENTENCE(문장)
+  itemsJson  String // [{word, response, distorted, audioPath}]
+  resultJson String // 분석 결과 (PCC, 음운변동, 위치별 정확도 …)
+  aiSummary  String? // AI 종합 해석
+}
+
+// 표준화 검사 점수 기록 (U-TAP2, PRES, REVT 등 — 점수만 관리)
+model StandardScore {
+  id            String   @id @default(cuid())
+  patientId     String
+  patient       Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  testName      String
+  date          DateTime @default(now())
+  rawScore      String?
+  standardScore String?
+  percentile    String?
+  note          String?
+}
+
+model Goal {
+  id        String  @id @default(cuid())
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  kind      String // LONG | SHORT
+  title     String
+  criterion String?
+  status    String  @default("ACTIVE") // ACTIVE | MET | PENDING
+  order     Int     @default(0)
+}
+
+model SessionNote {
+  id        String   @id @default(cuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date      DateTime @default(now())
+  minutes   Int      @default(30)
+  accuracy  Int? // 회기 정반응률 %
+  soapO     String?
+  soapP     String?
+}
+
+model Activity {
+  id          String             @id @default(cuid())
+  title       String
+  area        String // 조음음운 | 언어 | 유창성 | 음성 | 실어증
+  level       String? // 낱말 | 문장 | 자발화 ...
+  format      String // RECORD(녹음 제출) | CHECK(체크형) | PLAY(놀이형)
+  description String?
+  dose        String? // "20문항 · 약 10분"
+  targetText  String? // 녹음형일 때 목표 발화 안내
+  metricKind  String? // MPT(연장발성) | DDK(교대운동) | READ(읽기/자발화) — 단말 내 지표 산출 방식
+  goalCondition String? // 목표 수행 조건 (예: "8초 이상 유지")
+  items       PrescriptionItem[]
+}
+
+model Prescription {
+  id           String             @id @default(cuid())
+  patientId    String
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  weekStart    DateTime // 해당 주 월요일 00:00
+  obsItemsJson String? // 처방에 포함된 보호자 관찰 항목 키 배열
+  createdAt    DateTime           @default(now())
+  items        PrescriptionItem[]
+}
+
+model PrescriptionItem {
+  id             String       @id @default(cuid())
+  prescriptionId String
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  activityId     String
+  activity       Activity     @relation(fields: [activityId], references: [id])
+  dayOfWeek      Int // 0=월 ... 6=일
+  status         String       @default("PENDING") // PENDING | DONE
+  submissions    Submission[]
+}
+
+model Appointment {
+  id        String   @id @default(cuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  at        DateTime
+  kind      String   @default("대면") // 대면 | 원격
+  memo      String?
+}
+
+model Submission {
+  id            String            @id @default(cuid())
+  patientId     String
+  patient       Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  itemId        String?
+  item          PrescriptionItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  targetText    String?
+  audioPath     String?
+  metricsJson   String? // 단말 내 산출된 비진단 음성지표 (특허 단계 ③)
+  qualityFlag   String? // OK | LOW (품질 조건 미충족 — 청구항 10)
+  judgment      String? // CORRECT | APPROX | WRONG (조음 과제용)
+  reviewOpinion String? // 검수 의견 유형 (수행 적절 등 — 청구항 7)
+  feedback      String?
+  reviewMetaJson String? // AI 참고 분석 Beta 후보와 치료사 검수 결과 JSON
+  createdAt     DateTime          @default(now())
+  reviewedAt    DateTime?
+}
