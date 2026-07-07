@@ -20,8 +20,8 @@ export default async function PatientDetail({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const patient = await db.patient.findUnique({
-    where: { id },
+  const patient = await db.patient.findFirst({
+    where: { id, serviceLine: "CARE" },
     include: {
       goals: { orderBy: { order: "asc" } },
       sessions: { orderBy: { date: "asc" } },

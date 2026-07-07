@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 export default async function PatientsPage() {
   const patients = await db.patient.findMany({
+    where: { serviceLine: "CARE" },
     orderBy: { createdAt: "asc" },
     include: {
       prescriptions: {

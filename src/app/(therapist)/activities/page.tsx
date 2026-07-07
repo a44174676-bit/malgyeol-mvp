@@ -12,6 +12,7 @@ const FORMAT_LABEL: Record<string, string> = {
 
 export default async function ActivitiesPage() {
   const activities = await db.activity.findMany({
+    where: { serviceLine: "CARE" },
     orderBy: [{ area: "asc" }, { title: "asc" }],
     include: { _count: { select: { items: true } } },
   });

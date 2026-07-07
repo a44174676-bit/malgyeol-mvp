@@ -17,7 +17,7 @@ export default async function PrescribePage({
   const { fromSubmission, activity } = await searchParams;
   const [patient, activities] = await Promise.all([
     db.patient.findUnique({
-      where: { id },
+      where: { id, serviceLine: "CARE" },
       include: {
         prescriptions: {
           where: { weekStart: weekStart() },
@@ -25,7 +25,7 @@ export default async function PrescribePage({
         },
       },
     }),
-    db.activity.findMany({ orderBy: { area: "asc" } }),
+    db.activity.findMany({ where: { serviceLine: "CARE" }, orderBy: { area: "asc" } }),
   ]);
   if (!patient) notFound();
 

@@ -16,28 +16,30 @@ export default async function Dashboard() {
 
   const [appointments, pending, weekItems, riskAlerts] = await Promise.all([
     db.appointment.findMany({
-      where: { at: { gte: todayFrom, lt: todayTo } },
+      where: { at: { gte: todayFrom, lt: todayTo }, patient: { serviceLine: "CARE" } },
       include: { patient: true },
       orderBy: { at: "asc" },
     }),
     db.submission.findMany({
-      where: { reviewedAt: null },
+      where: { reviewedAt: null, patient: { serviceLine: "CARE" } },
       include: { patient: true, item: { include: { activity: true } } },
       orderBy: { createdAt: "desc" },
       take: 6,
     }),
     db.prescriptionItem.findMany({
-      where: { prescription: { weekStart: weekStart() } },
+      where: { prescription: { weekStart: weekStart(), patient: { serviceLine: "CARE" } } },
       include: { prescription: { include: { patient: true } } },
     }),
     db.observationEntry.findMany({
-      where: { date: { gte: weekAgo }, cough: { in: ["1-2회", "자주"] } },
+      where: { date: { gte: weekAgo }, cough: { in: ["1-2회", "자주"] }, patient: { serviceLine: "CARE" } },
       include: { patient: true },
       orderBy: { date: "desc" },
     }),
   ]);
 
-  const pendingTotal = await db.submission.count({ where: { reviewedAt: null } });
+  const pendingTotal = await db.submission.count({
+    where: { reviewedAt: null, patient: { serviceLine: "CARE" } },
+  });
 
   const done = weekItems.filter((i) => i.status === "DONE").length;
   const compliance = weekItems.length

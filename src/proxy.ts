@@ -8,7 +8,9 @@ export function proxy(request: NextRequest) {
   const isPublic =
     pathname.startsWith("/login") ||
     pathname.startsWith("/portal") ||
+    pathname.startsWith("/korean/portal") ||
     pathname.startsWith("/api/upload") ||
+    pathname.startsWith("/api/korean/upload") ||
     pathname.startsWith("/api/audio");
 
   if (isPublic) return NextResponse.next();

@@ -24,8 +24,8 @@ export default async function ReportPage({
   const start = new Date();
   start.setDate(start.getDate() - weeks * 7);
 
-  const patient = await db.patient.findUnique({
-    where: { id },
+  const patient = await db.patient.findFirst({
+    where: { id, serviceLine: "CARE" },
     include: {
       prescriptions: {
         where: { weekStart: { gte: new Date(start.getTime() - 6 * 86400000) } },

@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "demo:add-scenario": "tsx scripts/add-demo-scenario-activity.ts",
+    "demo:add-korean": "tsx scripts/add-korean-demo-data.ts",
     "db:seed": "tsx prisma/seed.ts"
   },
   "prisma": {

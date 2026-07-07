@@ -9,6 +9,7 @@ datasource db {
 
 model Patient {
   id                String             @id @default(cuid())
+  serviceLine       String             @default("CARE")
   name              String
   birthYear         Int?
   gender            String?
@@ -103,6 +104,7 @@ model SessionNote {
 
 model Activity {
   id          String             @id @default(cuid())
+  serviceLine String             @default("CARE")
   title       String
   area        String // 조음음운 | 언어 | 유창성 | 음성 | 실어증
   level       String? // 낱말 | 문장 | 자발화 ...

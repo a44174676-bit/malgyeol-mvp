@@ -66,22 +66,22 @@ export default async function ReviewPage() {
 
   const [pending, reviewed, riskObs, history] = await Promise.all([
     db.submission.findMany({
-      where: { reviewedAt: null },
+      where: { reviewedAt: null, patient: { serviceLine: "CARE" } },
       include: { patient: true, item: { include: { activity: true } } },
       orderBy: { createdAt: "asc" },
     }),
     db.submission.findMany({
-      where: { reviewedAt: { not: null } },
+      where: { reviewedAt: { not: null }, patient: { serviceLine: "CARE" } },
       include: { patient: true, item: { include: { activity: true } } },
       orderBy: { reviewedAt: "desc" },
       take: 8,
     }),
     db.observationEntry.findMany({
-      where: { date: { gte: threeDaysAgo }, cough: { in: ["1-2회", "자주"] } },
+      where: { date: { gte: threeDaysAgo }, cough: { in: ["1-2회", "자주"] }, patient: { serviceLine: "CARE" } },
       select: { patientId: true },
     }),
     db.submission.findMany({
-      where: { metricsJson: { not: null }, reviewedAt: { not: null } },
+      where: { metricsJson: { not: null }, reviewedAt: { not: null }, patient: { serviceLine: "CARE" } },
       select: { patientId: true, createdAt: true, metricsJson: true, item: { select: { activityId: true } } },
       orderBy: { createdAt: "desc" },
       take: 300,
