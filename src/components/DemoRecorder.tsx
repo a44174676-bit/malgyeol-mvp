@@ -5,7 +5,23 @@ import { DEMO_STORAGE_NOTICE } from "@/lib/demo";
 
 type RecorderState = "idle" | "recording" | "ready" | "blocked" | "unsupported";
 
-export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?: string }) {
+type DemoRecorderCopy = {
+  storageNotice?: string;
+  start?: string;
+  stop?: string;
+  reset?: string;
+  unsupported?: string;
+  blocked?: string;
+  ready?: string;
+};
+
+export function DemoRecorder({
+  label = "음성 녹음 미리보기",
+  copy = {},
+}: {
+  label?: string;
+  copy?: DemoRecorderCopy;
+}) {
   const [state, setState] = useState<RecorderState>("idle");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -39,7 +55,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
   async function startRecording() {
     if (typeof window === "undefined" || !navigator.mediaDevices || !window.MediaRecorder) {
       setState("unsupported");
-      setMessage("이 브라우저에서는 녹음 미리보기를 사용할 수 없습니다.");
+      setMessage(copy.unsupported ?? "이 브라우저에서는 녹음 미리보기를 사용할 수 없습니다.");
       return;
     }
 
@@ -79,7 +95,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
       stopTimer();
       stopStream();
       setState("blocked");
-      setMessage("마이크 권한이 허용되지 않았습니다. 브라우저 권한 설정을 확인해 주세요.");
+      setMessage(copy.blocked ?? "마이크 권한이 허용되지 않았습니다. 브라우저 권한 설정을 확인해 주세요.");
     }
   }
 
@@ -108,7 +124,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <p className="text-sm font-bold">{label}</p>
-          <p className="mt-1 text-xs text-ink-faint">{DEMO_STORAGE_NOTICE}</p>
+          <p className="mt-1 text-xs text-ink-faint">{copy.storageNotice ?? DEMO_STORAGE_NOTICE}</p>
         </div>
         <span className="rounded-full bg-ground px-3 py-1 text-xs font-bold text-ink-soft tabular">
           {duration.toFixed(1)}초
@@ -122,7 +138,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
             onClick={startRecording}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-bold text-white hover:bg-accent-deep"
           >
-            녹음 시작
+            {copy.start ?? "녹음 시작"}
           </button>
         ) : (
           <button
@@ -130,7 +146,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
             onClick={stopRecording}
             className="rounded-lg bg-warn px-4 py-2 text-sm font-bold text-white"
           >
-            녹음 종료
+            {copy.stop ?? "녹음 종료"}
           </button>
         )}
         {audioUrl && (
@@ -139,7 +155,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
             onClick={resetRecording}
             className="rounded-lg border border-line px-4 py-2 text-sm font-bold text-ink-soft hover:border-accent hover:text-accent-deep"
           >
-            다시 녹음
+            {copy.reset ?? "다시 녹음"}
           </button>
         )}
       </div>
@@ -148,7 +164,7 @@ export function DemoRecorder({ label = "음성 녹음 미리보기" }: { label?:
       {message && <p className="mt-3 text-xs font-semibold text-warn">{message}</p>}
       {state === "ready" && (
         <p className="mt-3 text-xs text-ink-faint">
-          이 미리보기는 현재 브라우저 탭 안에서만 재생됩니다. 서버 업로드와 파일 저장은 실행하지 않습니다.
+          {copy.ready ?? "이 미리보기는 현재 브라우저 탭 안에서만 재생됩니다. 서버 업로드와 파일 저장은 실행하지 않습니다."}
         </p>
       )}
     </div>
