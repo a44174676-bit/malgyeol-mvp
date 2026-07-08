@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEMO_STORAGE_NOTICE } from "@/lib/demo";
+import { computeVoiceMetrics, type FrameSample, type VoiceMetrics } from "@/lib/metrics";
 
 type RecorderState = "idle" | "recording" | "ready" | "blocked" | "unsupported";
 
@@ -18,9 +19,14 @@ type DemoRecorderCopy = {
 export function DemoRecorder({
   label = "음성 녹음 미리보기",
   copy = {},
+  metricKind,
+  onMetrics,
 }: {
   label?: string;
   copy?: DemoRecorderCopy;
+  /** 전달 시 녹음을 특허 기반 비진단 음성지표 엔진(computeVoiceMetrics)으로 실시간 분석합니다. */
+  metricKind?: VoiceMetrics["kind"];
+  onMetrics?: (metrics: VoiceMetrics | null) => void;
 }) {
   const [state, setState] = useState<RecorderState>("idle");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -31,6 +37,13 @@ export function DemoRecorder({
   const chunksRef = useRef<Blob[]>([]);
   const startedAtRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+
+  const ctxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const bufRef = useRef<Float32Array<ArrayBuffer> | null>(null);
+  const framesRef = useRef<FrameSample[]>([]);
+  const analysisStartRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
@@ -44,13 +57,57 @@ export function DemoRecorder({
     streamRef.current = null;
   }, []);
 
+  const stopAnalysis = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    ctxRef.current?.close().catch(() => {});
+    ctxRef.current = null;
+    analyserRef.current = null;
+  }, []);
+
+  function analysisLoop() {
+    const analyser = analyserRef.current;
+    const buf = bufRef.current;
+    const ctx = ctxRef.current;
+    if (!analyser || !buf || !ctx) return;
+    rafRef.current = requestAnimationFrame(analysisLoop);
+    analyser.getFloatTimeDomainData(buf);
+    let rms = 0;
+    for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / buf.length);
+    const db = rms > 0.0001 ? Math.max(0, Math.min(95, 96 + 20 * Math.log10(rms))) : 0;
+    let hz = 0;
+    if (rms > 0.012) {
+      const sr = ctx.sampleRate;
+      const minOff = Math.floor(sr / 500);
+      const maxOff = Math.floor(sr / 60);
+      let best = 0;
+      let bestOff = -1;
+      for (let off = minOff; off < maxOff; off++) {
+        let c = 0;
+        for (let i = 0; i < buf.length - off; i++) c += buf[i] * buf[i + off];
+        c /= buf.length - off;
+        if (c > best) {
+          best = c;
+          bestOff = off;
+        }
+      }
+      if (bestOff > 0 && best > 0.0008) hz = sr / bestOff;
+    }
+    const t = (performance.now() - analysisStartRef.current) / 1000;
+    framesRef.current.push({ t, db, hz });
+  }
+
   useEffect(() => {
     return () => {
       stopTimer();
+      stopAnalysis();
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       stopStream();
     };
-  }, [audioUrl, stopStream, stopTimer]);
+  }, [audioUrl, stopAnalysis, stopStream, stopTimer]);
 
   async function startRecording() {
     if (typeof window === "undefined" || !navigator.mediaDevices || !window.MediaRecorder) {
@@ -72,16 +129,35 @@ export function DemoRecorder({
       startedAtRef.current = Date.now();
       setDuration(0);
       setMessage("");
+      onMetrics?.(null);
+
+      if (metricKind) {
+        const ctx = new (window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        ctxRef.current = ctx;
+        analyserRef.current = analyser;
+        bufRef.current = new Float32Array(2048);
+        framesRef.current = [];
+        analysisStartRef.current = performance.now();
+        rafRef.current = requestAnimationFrame(analysisLoop);
+      }
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
         stopTimer();
+        stopAnalysis();
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         setAudioUrl(URL.createObjectURL(blob));
         setState("ready");
         stopStream();
+        if (metricKind) {
+          onMetrics?.(computeVoiceMetrics(framesRef.current, metricKind));
+        }
       };
 
       recorder.start();

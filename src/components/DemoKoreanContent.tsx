@@ -39,7 +39,7 @@ function DemoKoreanBody() {
 
       <section className="rounded-[28px] border border-[#f6d58f]/35 bg-[linear-gradient(135deg,rgba(4,12,29,0.98),rgba(9,27,52,0.92)_54%,rgba(16,34,61,0.86))] p-6 shadow-[0_18px_44px_rgba(0,0,0,0.36)]">
         <p className="inline-flex rounded-full border border-[#f6d58f]/60 px-3 py-1 text-xs font-bold uppercase tracking-[0.14em] text-[#fff2ce]">
-          Malgyeol Korean Mock Demo
+          MalGyeol Korean Mock Demo
         </p>
         <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-[#fff8e7]">
           {t.koreanTitle}
@@ -127,4 +127,3 @@ function DemoKoreanBody() {
     </>
   );
 }
-

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { decompose } from "@/lib/phonology";
+import { getMicStream } from "@/lib/mic";
+import { MicPicker } from "@/components/MicPicker";
 
 type Dist = { syl: number; part: "cho" | "jong" };
 type ItemState = { response: string; distorted: Dist[] };
@@ -43,6 +45,12 @@ export function TestRunner({
   const [finished, setFinished] = useState(false);
   const [showDistort, setShowDistort] = useState(false);
   const [recState, setRecState] = useState<"idle" | "rec">("idle");
+  const [micLevel, setMicLevel] = useState(0);
+  const [voiceDetected, setVoiceDetected] = useState(false);
+  const [silentWarning, setSilentWarning] = useState(false);
+  const levelCtxRef = useRef<AudioContext | null>(null);
+  const levelRafRef = useRef<number | null>(null);
+  const voiceRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [recordedCount, setRecordedCount] = useState(0);
@@ -81,8 +89,29 @@ export function TestRunner({
     }
     try {
       if (!streamRef.current || !streamRef.current.active) {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = await getMicStream();
       }
+      // 녹음 중 입력 레벨 감시 — 무음 녹음을 즉시 발견
+      voiceRef.current = false;
+      setVoiceDetected(false);
+      setSilentWarning(false);
+      const lvlCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      const lvlAnalyser = lvlCtx.createAnalyser();
+      lvlAnalyser.fftSize = 1024;
+      lvlCtx.createMediaStreamSource(streamRef.current).connect(lvlAnalyser);
+      levelCtxRef.current = lvlCtx;
+      const lvlBuf = new Float32Array(1024);
+      const lvlLoop = () => {
+        levelRafRef.current = requestAnimationFrame(lvlLoop);
+        lvlAnalyser.getFloatTimeDomainData(lvlBuf);
+        let rms = 0;
+        for (let i = 0; i < lvlBuf.length; i++) rms += lvlBuf[i] * lvlBuf[i];
+        rms = Math.sqrt(rms / lvlBuf.length);
+        const db = rms > 0.0001 ? Math.max(0, Math.min(95, 96 + 20 * Math.log10(rms))) : 0;
+        setMicLevel(db);
+        if (db > 35) { voiceRef.current = true; setVoiceDetected(true); }
+      };
+      lvlLoop();
       const rec = new MediaRecorder(streamRef.current);
       const at = idx;
       chunksRef.current = [];
@@ -96,6 +125,11 @@ export function TestRunner({
         urlsRef.current[at] = URL.createObjectURL(blob);
         setAudioUrls([...urlsRef.current]);
         setRecordedCount(blobsRef.current.filter(Boolean).length);
+        if (levelRafRef.current) cancelAnimationFrame(levelRafRef.current);
+        levelCtxRef.current?.close().catch(() => {});
+        levelCtxRef.current = null;
+        setMicLevel(0);
+        setSilentWarning(!voiceRef.current);
         setRecState("idle");
       };
       recRef.current = rec;
@@ -279,6 +313,30 @@ export function TestRunner({
         {audioUrl && recState === "idle" && (
           <audio controls src={audioUrl} className="h-9 max-w-48" />
         )}
+      </div>
+
+      {recState === "rec" && (
+        <div className="flex items-center gap-2 mb-3 max-w-sm mx-auto">
+          <span className="text-[11px] font-bold text-ink-faint shrink-0">입력 레벨</span>
+          <div className="h-3 rounded-full bg-ground overflow-hidden border border-line flex-1">
+            <div
+              className={`h-full transition-all ${micLevel > 35 ? "bg-good" : "bg-warn"}`}
+              style={{ width: `${(micLevel / 95) * 100}%` }}
+            />
+          </div>
+          <span className={`text-[11px] font-bold shrink-0 ${voiceDetected ? "text-good" : "text-warn"}`}>
+            {voiceDetected ? "✓ 소리 감지" : "무음"}
+          </span>
+        </div>
+      )}
+      {silentWarning && recState === "idle" && (
+        <p className="text-[12px] text-warn bg-warn-soft rounded-lg px-3 py-2 mb-3 max-w-sm mx-auto text-center">
+          녹음 중 소리가 감지되지 않았습니다 — 아래에서 마이크를 바꾸거나{" "}
+          <a href="/mic-check" target="_blank" className="underline font-bold">마이크 점검</a>을 해보세요
+        </p>
+      )}
+      <div className="flex justify-center mb-4">
+        <MicPicker />
       </div>
 
       <label className="text-xs font-semibold text-ink-soft block mb-1.5">

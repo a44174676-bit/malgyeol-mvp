@@ -54,6 +54,12 @@ export default async function LoginPage({
         <p className="mt-5 text-xs text-ink-faint leading-relaxed">
           보호자는 로그인 없이 치료사가 보내준 전용 링크로 접속합니다.
         </p>
+        <a
+          href="/demo"
+          className="block mt-3 text-center text-xs font-semibold text-accent-deep hover:underline"
+        >
+          공개 데모 보기 →
+        </a>
       </div>
     </main>
   );

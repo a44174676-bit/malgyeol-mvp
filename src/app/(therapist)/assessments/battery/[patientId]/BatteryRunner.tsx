@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DYSARTHRIA_BATTERY } from "@/lib/battery";
+import { getMicStream } from "@/lib/mic";
+import { MicPicker } from "@/components/MicPicker";
 import {
   computeVoiceMetrics, qualityIssue, metricRows,
   type VoiceMetrics, type FrameSample,
@@ -102,9 +104,7 @@ export function BatteryRunner({ patientId, patientName }: { patientId: string; p
     setError(""); setQuality(null);
     try {
       if (!streamRef.current || !streamRef.current.active) {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false },
-        });
+        streamRef.current = await getMicStream();
       }
       const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       const analyser = ctx.createAnalyser();
@@ -241,10 +241,11 @@ export function BatteryRunner({ patientId, patientName }: { patientId: string; p
   const audioUrl = urlsRef.current[idx];
   return (
     <div className="bg-white border border-line rounded-xl p-6 max-w-2xl">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <p className="text-[11px] font-bold tracking-widest text-ink-faint uppercase">
           {patientName} · 구음장애 선별 배터리
         </p>
+        <MicPicker />
         <span className="text-xs font-bold tabular text-accent-deep">
           {idx + 1} / {DYSARTHRIA_BATTERY.length} · 완료 {doneCount}
         </span>
