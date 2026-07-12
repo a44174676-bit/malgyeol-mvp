@@ -4,10 +4,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { DemoShell } from "@/components/DemoShell";
 import { Card, Eyebrow, Pill } from "@/components/ui";
-import { DISCLAIMER } from "@/lib/metrics";
+import { analyzeRecordingBlob, type AcousticAnalysis } from "@/lib/audio/analyze-audio-signal";
+import {
+  buildReferenceNote,
+  getSelectedReferenceLabel,
+  getTranscriptSummary,
+} from "@/lib/clinical/build-reference-note";
+import {
+  KOREAN_CLINICAL_REFERENCE_VERSION,
+  KOREAN_CLINICAL_REFERENCES,
+} from "@/lib/korean-clinical-reference";
 
 const TOP_NOTICE =
   "이 데모는 실제 저장되지 않는 공개 베타 미리보기입니다. 실제 환자 정보, 실제 검사 결과, 실제 음성파일은 저장하지 않습니다.";
+const AUTOMATIC_RESULT_NOTICE =
+  "이 결과는 국내 임상평가 항목을 참고해 자동 정리한 전문가 검수 전 자료입니다. 의료 진단, 장애 정도 또는 치료 효과 판정을 의미하지 않습니다.";
 
 const tasks = [
   {
@@ -85,6 +96,7 @@ const tasks = [
 type TaskId = (typeof tasks)[number]["id"];
 type PromptMode = "text" | "picture";
 type AiAnalysisStatus = "idle" | "uploading" | "success" | "error";
+type AcousticAnalysisStatus = "idle" | "analyzing" | "ready" | "error";
 type SpeechAnalysisResponse = {
   success: true;
   provider: "openai";
@@ -105,64 +117,21 @@ type SpeechAnalysisResponse = {
   notices: string[];
 };
 
-const mockMetricByTask: Record<TaskId, Array<[string, string]>> = {
-  vowel: [
-    ["녹음 품질", "양호"],
-    ["발화 지속시간", "8.4초"],
-    ["말속도", "해당 과제 참고 제외"],
-    ["무음구간", "0.6초"],
-    ["반복 횟수", "해당 과제 참고 제외"],
-    ["인식 불확실 구간", "후반 1.2초"],
-    ["불일치 후보", "없음"],
-  ],
-  amr: [
-    ["녹음 품질", "양호"],
-    ["발화 지속시간", "6.8초"],
-    ["말속도", "초당 4.1회"],
-    ["무음구간", "0.4초"],
-    ["반복 횟수", "28회"],
-    ["인식 불확실 구간", "중간 0.5초"],
-    ["불일치 후보", "터/커 혼동 후보 1개"],
-  ],
-  smr: [
-    ["녹음 품질", "재녹음 권장"],
-    ["발화 지속시간", "7.1초"],
-    ["말속도", "초당 2.3세트"],
-    ["무음구간", "1.1초"],
-    ["반복 횟수", "16세트"],
-    ["인식 불확실 구간", "초반 0.8초"],
-    ["불일치 후보", "퍼터커 순서 흔들림 후보"],
-  ],
-  reading: [
-    ["녹음 품질", "양호"],
-    ["발화 지속시간", "12.6초"],
-    ["말속도", "분당 92음절"],
-    ["무음구간", "2.2초"],
-    ["반복 횟수", "해당 과제 참고 제외"],
-    ["인식 불확실 구간", "문장 후반 1곳"],
-    ["불일치 후보", "전화/전하 후보"],
-  ],
-  spontaneous: [
-    ["녹음 품질", "양호"],
-    ["발화 지속시간", "21.3초"],
-    ["말속도", "분당 84음절"],
-    ["무음구간", "3.4초"],
-    ["반복 횟수", "해당 과제 참고 제외"],
-    ["인식 불확실 구간", "긴 멈춤 이후 1곳"],
-    ["불일치 후보", "없음"],
-  ],
-};
-void mockMetricByTask;
-
 const therapistFields = [
+  "적용 기준 선택",
+  "자동 음절 분절 확인",
+  "반복 횟수 수정",
   "말명료도 관찰",
-  "반복 발화 양상",
-  "무음구간 증가 여부",
-  "피로도 관찰",
-  "오류 유형 메모",
-  "재검사 필요 여부",
-  "홈트레이닝 권장 방향",
+  "리듬 규칙성 관찰",
+  "조음 붕괴 여부",
+  "검사 유효성",
+  "최종 참고의견",
+  "전문가 승인",
 ];
+
+function createEmptyExpertReviewValues() {
+  return Object.fromEntries(therapistFields.map((field) => [field, ""]));
+}
 
 const homeTrainingCandidates = [
   "모음 연장 발성 3회",
@@ -175,6 +144,38 @@ function formatTime(seconds: number) {
   const mins = Math.floor(seconds / 60).toString().padStart(2, "0");
   const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${mins}:${secs}`;
+}
+
+function formatSeconds(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "자동 분절 확인 필요";
+  }
+
+  return `${value.toFixed(2)}초`;
+}
+
+function formatRate(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "자동 분절 확인 필요";
+  }
+
+  return `${value.toFixed(2)}음절/초`;
+}
+
+function formatPercent(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "자동 분절 확인 필요";
+  }
+
+  return `${value.toFixed(1)}%`;
+}
+
+function formatNumber(value: number | null, suffix = "") {
+  if (value === null || Number.isNaN(value)) {
+    return "자동 분절 확인 필요";
+  }
+
+  return `${value.toFixed(2)}${suffix}`;
 }
 
 export function DemoCareContent() {
@@ -199,6 +200,10 @@ function DemoCareBody() {
   const [aiAnalysisStatus, setAiAnalysisStatus] = useState<AiAnalysisStatus>("idle");
   const [aiAnalysisResult, setAiAnalysisResult] = useState<SpeechAnalysisResponse | null>(null);
   const [aiAnalysisError, setAiAnalysisError] = useState("");
+  const [acousticAnalysisStatus, setAcousticAnalysisStatus] = useState<AcousticAnalysisStatus>("idle");
+  const [acousticAnalysis, setAcousticAnalysis] = useState<AcousticAnalysis | null>(null);
+  const [acousticAnalysisError, setAcousticAnalysisError] = useState("");
+  const [expertReviewValues, setExpertReviewValues] = useState<Record<string, string>>(() => createEmptyExpertReviewValues());
   const [distributionStatus, setDistributionStatus] = useState<"draft" | "approved" | "edited" | "distributed">("draft");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -208,6 +213,7 @@ function DemoCareBody() {
   const dataAvailableCountRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const acousticAnalysisRequestRef = useRef(0);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? tasks[0],
@@ -215,6 +221,10 @@ function DemoCareBody() {
   );
   const hasRecording = playbackReady && Boolean(audioUrl) && Boolean(recordedBlob);
   const canRequestAiAnalysis = Boolean(recordedBlob) && playbackReady && aiConsent && aiAnalysisStatus !== "uploading";
+  const transcriptSummary = useMemo(
+    () => getTranscriptSummary(aiAnalysisResult, selectedTaskId),
+    [aiAnalysisResult, selectedTaskId],
+  );
 
   useEffect(() => {
     return () => {
@@ -283,6 +293,47 @@ function DemoCareBody() {
     streamRef.current = null;
   }
 
+  function runAcousticAnalysis(blob: Blob, taskId: TaskId) {
+    const requestId = acousticAnalysisRequestRef.current + 1;
+    acousticAnalysisRequestRef.current = requestId;
+    setAcousticAnalysisStatus("analyzing");
+    setAcousticAnalysis(null);
+    setAcousticAnalysisError("");
+
+    void analyzeRecordingBlob(blob, taskId)
+      .then((analysis) => {
+        if (acousticAnalysisRequestRef.current !== requestId) {
+          return;
+        }
+
+        setAcousticAnalysis(analysis);
+        setAcousticAnalysisStatus("ready");
+      })
+      .catch((error: unknown) => {
+        if (acousticAnalysisRequestRef.current !== requestId) {
+          return;
+        }
+
+        console.error("[Malgyeol] acoustic analysis failed", error);
+        setAcousticAnalysis(null);
+        setAcousticAnalysisStatus("error");
+        setAcousticAnalysisError("브라우저에서 원음 파형을 해석하지 못했습니다. 임상 전문가 청취 검수가 필요합니다.");
+      });
+  }
+
+  function resetDerivedResults() {
+    acousticAnalysisRequestRef.current += 1;
+    setAiConsent(false);
+    setAiAnalysisStatus("idle");
+    setAiAnalysisResult(null);
+    setAiAnalysisError("");
+    setAcousticAnalysisStatus("idle");
+    setAcousticAnalysis(null);
+    setAcousticAnalysisError("");
+    setExpertReviewValues(createEmptyExpertReviewValues());
+    setDistributionStatus("draft");
+  }
+
   function resetRecording(nextTaskId?: TaskId) {
     stopTimer();
     stopStream();
@@ -305,11 +356,7 @@ function DemoCareBody() {
     setElapsedSeconds(0);
     setIsRecording(false);
     setErrorMessage("");
-    setAiConsent(false);
-    setAiAnalysisStatus("idle");
-    setAiAnalysisResult(null);
-    setAiAnalysisError("");
-    setDistributionStatus("draft");
+    resetDerivedResults();
     if (nextTaskId) setSelectedTaskId(nextTaskId);
   }
 
@@ -345,11 +392,7 @@ function DemoCareBody() {
       chunksRef.current = [];
       dataAvailableCountRef.current = 0;
       setElapsedSeconds(0);
-      setAiConsent(false);
-      setAiAnalysisStatus("idle");
-      setAiAnalysisResult(null);
-      setAiAnalysisError("");
-      setDistributionStatus("draft");
+      resetDerivedResults();
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log("mic stream acquired");
@@ -383,6 +426,9 @@ function DemoCareBody() {
           setRecordedBlob(null);
           setAudioUrl(null);
           setPlaybackReady(false);
+          setAcousticAnalysisStatus("idle");
+          setAcousticAnalysis(null);
+          setAcousticAnalysisError("");
           stopStream();
           mediaRecorderRef.current = null;
           return;
@@ -400,6 +446,9 @@ function DemoCareBody() {
           setRecordedBlob(null);
           setAudioUrl(null);
           setPlaybackReady(false);
+          setAcousticAnalysisStatus("idle");
+          setAcousticAnalysis(null);
+          setAcousticAnalysisError("");
           stopStream();
           mediaRecorderRef.current = null;
           return;
@@ -407,13 +456,25 @@ function DemoCareBody() {
 
         const url = URL.createObjectURL(blob);
         console.log("audio url created", url);
+        console.log("[Malgyeol] recording stopped summary", {
+          chunksLength: chunksRef.current.length,
+          blobSize: blob.size,
+          blobType: blob.type,
+          audioUrl: url,
+        });
         console.log("[Malgyeol] audio object URL:", url);
         audioUrlRef.current = url;
+        if (audioRef.current) {
+          audioRef.current.src = url;
+          audioRef.current.load();
+          audioRef.current.currentTime = 0;
+        }
         setRecordedBlob(blob);
         setAudioUrl(url);
         setPlaybackReady(false);
         setErrorMessage("");
         mediaRecorderRef.current = null;
+        runAcousticAnalysis(blob, selectedTaskId);
       };
 
       mediaRecorderRef.current = recorder;
@@ -469,6 +530,8 @@ function DemoCareBody() {
     setAiAnalysisStatus("uploading");
     setAiAnalysisError("");
     setAiAnalysisResult(null);
+    setExpertReviewValues(createEmptyExpertReviewValues());
+    setDistributionStatus("draft");
 
     const form = new FormData();
     form.append("audio", recordedBlob, `malgyeol-${selectedTask.id}.webm`);
@@ -592,6 +655,40 @@ function DemoCareBody() {
     );
   }
 
+  const automaticMeasurementRows = acousticAnalysis
+    ? [
+        ["전체 녹음시간", formatSeconds(acousticAnalysis.totalDurationSecond)],
+        ["실제 발성시간", formatSeconds(acousticAnalysis.voicedDurationSecond)],
+        ["무음 비율", formatPercent(acousticAnalysis.silenceRatioPercent)],
+        ["250ms 이상 중간 무음", `${acousticAnalysis.midSilenceCount}회`],
+        ["음량 변동", acousticAnalysis.loudnessVariationDb === null ? "측정 후보 없음" : `${acousticAnalysis.loudnessVariationDb.toFixed(1)}dB`],
+        ["입력 왜곡 가능성", acousticAnalysis.distortionPossible ? "가능성 있음: 재녹음 또는 청취 검수 필요" : "뚜렷한 클리핑 후보 없음"],
+      ]
+    : [];
+  const segmentation = acousticAnalysis?.segmentation ?? null;
+  const segmentationRows =
+    segmentation && segmentation.status === "ready"
+      ? [
+          ["각 음절 반복 횟수", Object.entries(segmentation.syllableCounts).map(([key, value]) => `${key} ${value}회`).join(" · ")],
+          ["전체 녹음시간 기준", formatRate(segmentation.syllablesPerTotalSecond)],
+          ["실제 발성시간 기준", formatRate(segmentation.syllablesPerVoicedSecond)],
+          ["음절 간격 평균", formatSeconds(segmentation.meanIntervalSecond)],
+          ["음절 간격 표준편차", formatSeconds(segmentation.intervalStandardDeviationSecond)],
+          ["음절 간격 변동계수", formatNumber(segmentation.intervalCoefficientOfVariation)],
+          ["후반부 속도 변화", formatPercent(segmentation.lateSpeedChangePercent)],
+        ]
+      : [];
+  const clinicalReferenceText =
+    buildReferenceNote({
+      aiAnalysisReady: aiAnalysisStatus === "success",
+      taskId: selectedTaskId,
+      transcriptSummary,
+    });
+  const selectedReferenceLabel = getSelectedReferenceLabel({
+    version: KOREAN_CLINICAL_REFERENCE_VERSION,
+    references: KOREAN_CLINICAL_REFERENCES,
+  });
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -611,7 +708,7 @@ function DemoCareBody() {
           표준화 녹음 테스트 데모
         </h1>
         <p className="mt-3 max-w-4xl text-base font-semibold leading-7 text-[#dff7ff]">
-          5가지 표준화된 녹음 과제 중 하나를 선택해 녹음하고, 녹음 완료 후 데모용 예시 지표와 치료사 검수 mock 흐름을 확인합니다.
+          5가지 표준화된 녹음 과제 중 하나를 선택해 녹음하고, 녹음 완료 후 자동 정리 지표와 임상 전문가 검수 흐름을 확인합니다.
         </p>
         <p className="mt-4 rounded-2xl border border-[#f6d58f]/25 bg-[#f6d58f]/10 px-4 py-3 text-sm font-semibold leading-6 text-[#fff2ce]">
           {TOP_NOTICE}
@@ -791,6 +888,140 @@ function DemoCareBody() {
 
       {hasRecording ? (
       <section className="grid gap-4 lg:grid-cols-2">
+        <Card className="bg-white/95 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <Eyebrow>전문가 검수 전 자동 참고의견</Eyebrow>
+              <p className="mt-2 text-sm font-semibold leading-6 text-ink-soft">
+                국내 임상평가 항목을 참고한 구조이며, 전문가 승인 기준값은 아직 등록되지 않았습니다.
+              </p>
+            </div>
+            <Pill tone="warn">전문가 기준 검토 전</Pill>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div className="rounded-lg border border-line bg-ground px-4 py-4">
+              <p className="text-sm font-extrabold text-ink">A. 자동 음향 측정</p>
+              {acousticAnalysisStatus === "analyzing" && (
+                <p className="mt-3 text-sm font-semibold leading-6 text-ink-soft">
+                  원음 파형에서 발성 구간과 에너지 피크 후보를 계산하고 있습니다.
+                </p>
+              )}
+              {acousticAnalysisStatus === "error" && (
+                <p className="mt-3 text-sm font-semibold leading-6 text-warn">{acousticAnalysisError}</p>
+              )}
+              {acousticAnalysisStatus === "ready" && acousticAnalysis && (
+                <div className="mt-3 grid gap-2">
+                  {automaticMeasurementRows.map(([label, value]) => (
+                    <div key={label} className="flex items-start justify-between gap-3 rounded-lg border border-line bg-white px-3 py-2">
+                      <span className="text-xs font-bold text-ink-faint">{label}</span>
+                      <span className="text-right text-sm font-extrabold text-ink">{value}</span>
+                    </div>
+                  ))}
+                  <div className="rounded-lg border border-line bg-white px-3 py-3">
+                    <p className="text-xs font-bold text-ink-faint">자동 음절 분절 후보</p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-ink-faint">
+                      숨소리, 마이크 잡음, 파열음이 음절 후보로 감지될 수 있으므로 전문가 청취 확인이 필요합니다.
+                    </p>
+                    {segmentation?.status === "ready" ? (
+                      <div className="mt-2 grid gap-2">
+                        {segmentationRows.map(([label, value]) => (
+                          <div key={label} className="flex items-start justify-between gap-3 text-sm">
+                            <span className="font-semibold text-ink-soft">{label}</span>
+                            <span className="text-right font-extrabold text-ink">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm font-semibold leading-6 text-ink-soft">
+                        {segmentation?.reason ?? "자동 분절 확인 필요"}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-line bg-ground px-4 py-4">
+              <p className="text-sm font-extrabold text-ink">B. AI 음성인식 결과</p>
+              {aiAnalysisStatus !== "success" || !aiAnalysisResult ? (
+                <p className="mt-3 text-sm font-semibold leading-6 text-ink-soft">
+                  AI 전사를 실행하면 전사문, 제시 음절 인식 여부, 전사 기준 반복 횟수, 순서 인식 결과가 표시됩니다.
+                </p>
+              ) : (
+                <div className="mt-3 grid gap-2">
+                  <div className="rounded-lg border border-line bg-white px-3 py-3">
+                    <p className="text-xs font-bold text-ink-faint">전사문</p>
+                    <p className="mt-2 text-sm font-semibold leading-6 text-ink">{transcriptSummary.transcript || "전사문 없음"}</p>
+                  </div>
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs font-bold text-ink-faint">제시 음절 인식 여부</p>
+                    <p className="mt-1 text-sm font-semibold text-ink-soft">{transcriptSummary.targetStatus}</p>
+                  </div>
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs font-bold text-ink-faint">AI 전사 기준 반복 횟수</p>
+                    <p className="mt-1 text-sm font-semibold text-ink-soft">{transcriptSummary.repetitionText}</p>
+                  </div>
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs font-bold text-ink-faint">순서 인식 결과</p>
+                    <p className="mt-1 text-sm font-semibold text-ink-soft">{transcriptSummary.orderStatus}</p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-lg border border-line bg-white px-3 py-2">
+                      <p className="text-xs font-bold text-ink-faint">누락 인식 표현</p>
+                      <p className="mt-1 text-sm font-semibold text-ink-soft">
+                        {aiAnalysisResult.comparison.omittedTokens.length ? aiAnalysisResult.comparison.omittedTokens.join(" ") : "표시할 항목 없음"}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-white px-3 py-2">
+                      <p className="text-xs font-bold text-ink-faint">추가 인식 표현</p>
+                      <p className="mt-1 text-sm font-semibold text-ink-soft">
+                        {aiAnalysisResult.comparison.addedTokens.length ? aiAnalysisResult.comparison.addedTokens.join(" ") : "표시할 항목 없음"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-line bg-ground px-4 py-4">
+              <p className="text-sm font-extrabold text-ink">C. 전문가 검수 전 참고의견</p>
+              <div className="mt-3 grid gap-2">
+                <div className="rounded-lg border border-[#f6d58f]/35 bg-[#fff8e7] px-3 py-3">
+                  <p className="text-xs font-bold text-[#6b4a0b]">현재 측정값 설명</p>
+                  <p className="mt-2 text-sm font-bold leading-6 text-[#6b4a0b]">{clinicalReferenceText}</p>
+                </div>
+                <div className="rounded-lg border border-line bg-white px-3 py-2">
+                  <p className="text-xs font-bold text-ink-faint">검사의 충분성 여부</p>
+                  <p className="mt-1 text-sm font-semibold text-ink-soft">
+                    승인된 기준표와 전문가 청취 검수 전에는 충분성을 확정하지 않습니다.
+                  </p>
+                </div>
+                <div className="rounded-lg border border-line bg-white px-3 py-2">
+                  <p className="text-xs font-bold text-ink-faint">해석 제한</p>
+                  <p className="mt-1 text-sm font-semibold text-ink-soft">
+                    OpenAI 전사는 음성인식 참고자료이며 임상평가 결과로 표시하지 않습니다.
+                  </p>
+                </div>
+                <div className="rounded-lg border border-line bg-white px-3 py-2">
+                  <p className="text-xs font-bold text-ink-faint">전문가 확인 필요 항목</p>
+                  <p className="mt-1 text-sm font-semibold text-ink-soft">
+                    원음 청취, 자동 음절 분절, 반복 횟수, 리듬 규칙성, 조음 붕괴 여부, 검사 유효성
+                  </p>
+                </div>
+                <div className="rounded-lg border border-line bg-white px-3 py-2">
+                  <p className="text-xs font-bold text-ink-faint">적용한 참고기준</p>
+                  <p className="mt-1 text-sm font-semibold text-ink-soft">{selectedReferenceLabel}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-4 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
+            {AUTOMATIC_RESULT_NOTICE}
+          </p>
+        </Card>
+
         <Card className="bg-white/95">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Eyebrow>AI 음성인식 참고 결과</Eyebrow>
@@ -863,36 +1094,65 @@ function DemoCareBody() {
             </div>
           )}
           <p className="mt-3 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
-            {DISCLAIMER}
+            {AUTOMATIC_RESULT_NOTICE}
           </p>
         </Card>
 
         <Card className="bg-white/95">
-          <Eyebrow>치료사 결과 입력 mock 폼</Eyebrow>
+          <Eyebrow>임상 전문가 검수 영역</Eyebrow>
+          <p className="mb-3 rounded-lg border border-[#f6d58f]/35 bg-[#fff8e7] px-3 py-2 text-xs font-bold leading-5 text-[#6b4a0b]">
+            이 공개 데모의 전문가 입력 내용은 저장되지 않습니다.
+          </p>
           <div className="grid gap-3">
             {therapistFields.map((field) => (
               <label key={field} className="grid gap-1 text-sm font-bold text-ink">
                 {field}
-                {field === "재검사 필요 여부" ? (
-                  <select className="rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft">
-                    <option>치료사 검수 후 결정</option>
-                    <option>재검사 필요</option>
-                    <option>현재 기록 유지</option>
+                {field === "적용 기준 선택" ? (
+                  <select
+                    value={expertReviewValues[field]}
+                    onChange={(event) => setExpertReviewValues((values) => ({ ...values, [field]: event.target.value }))}
+                    className="rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft"
+                  >
+                    <option value="">전문가 검수 전</option>
+                    <option value={selectedReferenceLabel}>{selectedReferenceLabel}</option>
+                    <option value="전문가 승인 기준 등록 후 선택">전문가 승인 기준 등록 후 선택</option>
                   </select>
+                ) : field === "자동 음절 분절 확인" || field === "검사 유효성" || field === "전문가 승인" ? (
+                  <select
+                    value={expertReviewValues[field]}
+                    onChange={(event) => setExpertReviewValues((values) => ({ ...values, [field]: event.target.value }))}
+                    className="rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft"
+                  >
+                    <option value="">전문가 검수 전</option>
+                    <option value="확인 필요">확인 필요</option>
+                    <option value="검수 완료">검수 완료</option>
+                  </select>
+                ) : field === "최종 참고의견" ? (
+                  <textarea
+                    value={expertReviewValues[field]}
+                    onChange={(event) => setExpertReviewValues((values) => ({ ...values, [field]: event.target.value }))}
+                    className="min-h-24 rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft"
+                    placeholder={`${field} 입력`}
+                  />
                 ) : (
-                  <input className="rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft" placeholder={`${field} 입력 예시`} />
+                  <input
+                    value={expertReviewValues[field]}
+                    onChange={(event) => setExpertReviewValues((values) => ({ ...values, [field]: event.target.value }))}
+                    className="rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink-soft"
+                    placeholder={`${field} 입력`}
+                  />
                 )}
               </label>
             ))}
           </div>
           <p className="mt-3 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
-            {DISCLAIMER}
+            {AUTOMATIC_RESULT_NOTICE}
           </p>
         </Card>
 
         <Card className="bg-white/95">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Eyebrow>AI 보조 과제 후보 mock 카드</Eyebrow>
+            <Eyebrow>AI 보조 과제 후보 카드</Eyebrow>
             <Pill tone="teal">홈트레이닝 과제 후보</Pill>
           </div>
           <div className="grid gap-2">
@@ -903,37 +1163,37 @@ function DemoCareBody() {
             ))}
           </div>
           <p className="mt-3 text-sm leading-6 text-ink-soft">
-            과제 후보는 치료사 검수 참고자료 예시이며, 최종 배포 내용은 치료사가 승인 또는 수정합니다.
+            과제 후보는 임상 전문가 검수 참고자료 예시이며, 최종 배포 내용은 임상 전문가가 승인 또는 수정합니다.
           </p>
           <p className="mt-3 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
-            {DISCLAIMER}
+            {AUTOMATIC_RESULT_NOTICE}
           </p>
         </Card>
 
         <Card className="bg-white/95">
-          <Eyebrow>치료사 승인 및 배포 상태 mock</Eyebrow>
+          <Eyebrow>임상 전문가 승인 및 배포 상태</Eyebrow>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setDistributionStatus("approved")} className="rounded-lg bg-accent px-4 py-2 text-sm font-bold text-white hover:bg-accent-deep">
-              치료사 승인
+              전문가 승인
             </button>
             <button type="button" onClick={() => setDistributionStatus("edited")} className="rounded-lg border border-line px-4 py-2 text-sm font-bold text-ink-soft hover:border-accent hover:text-accent-deep">
-              치료사 수정
+              전문가 수정
             </button>
             <button type="button" onClick={() => setDistributionStatus("distributed")} className="rounded-lg bg-good px-4 py-2 text-sm font-bold text-white">
               홈트레이닝 과제 배포 완료
             </button>
           </div>
           <div className="mt-4 rounded-xl border border-line bg-ground px-4 py-3">
-            <p className="text-xs font-bold text-ink-faint">현재 mock 상태</p>
+            <p className="text-xs font-bold text-ink-faint">현재 검수 상태</p>
             <p className="mt-1 text-lg font-extrabold text-ink">
-              {distributionStatus === "draft" && "치료사 검수 대기"}
-              {distributionStatus === "approved" && "치료사 승인 완료"}
-              {distributionStatus === "edited" && "치료사 수정안 반영"}
-              {distributionStatus === "distributed" && "홈트레이닝 과제 배포 완료 mock"}
+              {distributionStatus === "draft" && "임상 전문가 검수 대기"}
+              {distributionStatus === "approved" && "임상 전문가 승인 완료"}
+              {distributionStatus === "edited" && "임상 전문가 수정안 반영"}
+              {distributionStatus === "distributed" && "홈트레이닝 과제 배포 완료"}
             </p>
           </div>
           <p className="mt-3 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
-            {DISCLAIMER}
+            {AUTOMATIC_RESULT_NOTICE}
           </p>
         </Card>
       </section>
@@ -941,7 +1201,7 @@ function DemoCareBody() {
         <Card className="border-[#7dd3fc]/25 bg-white/95">
           <Eyebrow>녹음 완료 후 표시</Eyebrow>
           <p className="text-sm font-semibold leading-6 text-ink-soft">
-            녹음 종료 후 녹음 재생 플레이어, 데모용 예시 지표, 치료사 입력 mock 폼, AI 보조 과제 후보 mock 카드가 표시됩니다.
+            녹음 종료 후 녹음 재생 플레이어, 자동 음향 측정, AI 음성인식 결과, 자동 참고의견, 임상 전문가 검수 입력이 표시됩니다.
           </p>
         </Card>
       )}
