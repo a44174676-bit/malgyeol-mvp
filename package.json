@@ -9,7 +9,8 @@
     "lint": "eslint",
     "demo:add-scenario": "tsx scripts/add-demo-scenario-activity.ts",
     "demo:add-korean": "tsx scripts/add-korean-demo-data.ts",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "care:create-demo-users": "tsx scripts/create-care-demo-users.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

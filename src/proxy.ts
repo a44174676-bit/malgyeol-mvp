@@ -17,7 +17,11 @@ export function proxy(request: NextRequest) {
     pathname.startsWith("/api/speech-analysis") ||
     pathname.startsWith("/api/upload") ||
     pathname.startsWith("/api/korean/upload") ||
-    pathname.startsWith("/api/audio");
+    pathname.startsWith("/api/audio") ||
+    // Care는 mg_session(치료사 비밀번호)이 아닌 별도의 mg_care_session으로 인증한다.
+    // 서버 페이지의 requireCareRole/requireCareUser가 실제 접근 통제를 담당한다.
+    pathname.startsWith("/care") ||
+    pathname.startsWith("/api/care");
 
   if (isPublic) return NextResponse.next();
 
