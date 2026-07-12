@@ -9,9 +9,6 @@ import { DISCLAIMER } from "@/lib/metrics";
 const TOP_NOTICE =
   "이 데모는 실제 저장되지 않는 공개 베타 미리보기입니다. 실제 환자 정보, 실제 검사 결과, 실제 음성파일은 저장하지 않습니다.";
 
-const MOCK_METRIC_NOTICE =
-  "아래 지표는 실제 AI 분석 결과가 아니라, 화면 흐름을 설명하기 위한 데모용 예시값입니다.";
-
 const tasks = [
   {
     id: "vowel",
@@ -87,6 +84,26 @@ const tasks = [
 
 type TaskId = (typeof tasks)[number]["id"];
 type PromptMode = "text" | "picture";
+type AiAnalysisStatus = "idle" | "uploading" | "success" | "error";
+type SpeechAnalysisResponse = {
+  success: true;
+  provider: "openai";
+  model: string;
+  transcript: string;
+  taskId: string;
+  taskType: string;
+  expectedText: string | null;
+  comparison: {
+    normalizedExpectedText: string | null;
+    normalizedTranscript: string;
+    matchedTokenCount: number | null;
+    expectedTokenCount: number | null;
+    omittedTokens: string[];
+    addedTokens: string[];
+    referenceMatchPercent: number | null;
+  };
+  notices: string[];
+};
 
 const mockMetricByTask: Record<TaskId, Array<[string, string]>> = {
   vowel: [
@@ -135,6 +152,7 @@ const mockMetricByTask: Record<TaskId, Array<[string, string]>> = {
     ["불일치 후보", "없음"],
   ],
 };
+void mockMetricByTask;
 
 const therapistFields = [
   "말명료도 관찰",
@@ -173,27 +191,85 @@ function DemoCareBody() {
   const [promptMode, setPromptMode] = useState<PromptMode>("text");
   const [isRecording, setIsRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [playbackReady, setPlaybackReady] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [aiConsent, setAiConsent] = useState(false);
+  const [aiAnalysisStatus, setAiAnalysisStatus] = useState<AiAnalysisStatus>("idle");
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<SpeechAnalysisResponse | null>(null);
+  const [aiAnalysisError, setAiAnalysisError] = useState("");
   const [distributionStatus, setDistributionStatus] = useState<"draft" | "approved" | "edited" | "distributed">("draft");
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const dataAvailableCountRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? tasks[0],
     [selectedTaskId],
   );
-  const hasRecording = Boolean(audioUrl);
+  const hasRecording = playbackReady && Boolean(audioUrl) && Boolean(recordedBlob);
+  const canRequestAiAnalysis = Boolean(recordedBlob) && playbackReady && aiConsent && aiAnalysisStatus !== "uploading";
 
   useEffect(() => {
     return () => {
       stopTimer();
       stopStream();
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+
+    if (!audio || !audioUrl) {
+      return;
+    }
+
+    setPlaybackReady(false);
+    audio.pause();
+    audio.currentTime = 0;
+    audio.load();
+
+    const handleLoadedMetadata = () => {
+      console.log("[Malgyeol] audio metadata loaded", {
+        duration: audio.duration,
+        readyState: audio.readyState,
+      });
+      stopStream();
+    };
+
+    const handleCanPlay = () => {
+      console.log("[Malgyeol] audio can play");
+      setPlaybackReady(true);
+      stopStream();
+    };
+
+    const handleError = () => {
+      console.error("[Malgyeol] audio playback error", audio.error);
+      setPlaybackReady(false);
+      setErrorMessage("녹음 파일을 재생할 수 없습니다. 브라우저가 이 오디오 형식을 지원하는지 확인한 뒤 다시 녹음해 주세요.");
+      stopStream();
+    };
+
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("canplay", handleCanPlay);
+    audio.addEventListener("error", handleError);
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("canplay", handleCanPlay);
+      audio.removeEventListener("error", handleError);
+    };
+  }, [audioUrl]);
 
   function stopTimer() {
     if (timerRef.current) {
@@ -210,13 +286,29 @@ function DemoCareBody() {
   function resetRecording(nextTaskId?: TaskId) {
     stopTimer();
     stopStream();
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
     mediaRecorderRef.current = null;
     chunksRef.current = [];
+    dataAvailableCountRef.current = 0;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+      audioRef.current.currentTime = 0;
+    }
+    setRecordedBlob(null);
     setAudioUrl(null);
+    setPlaybackReady(false);
     setElapsedSeconds(0);
     setIsRecording(false);
     setErrorMessage("");
+    setAiConsent(false);
+    setAiAnalysisStatus("idle");
+    setAiAnalysisResult(null);
+    setAiAnalysisError("");
     setDistributionStatus("draft");
     if (nextTaskId) setSelectedTaskId(nextTaskId);
   }
@@ -226,9 +318,9 @@ function DemoCareBody() {
       "audio/webm;codecs=opus",
       "audio/webm",
       "audio/mp4",
-      "audio/ogg;codecs=opus",
+      "audio/mpeg",
     ];
-    return candidates.find((type) => MediaRecorder.isTypeSupported(type));
+    return candidates.find((type) => window.MediaRecorder.isTypeSupported(type));
   }
 
   async function startRecording() {
@@ -239,22 +331,43 @@ function DemoCareBody() {
 
     try {
       setErrorMessage("");
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-        setAudioUrl(null);
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
       }
+      if (audioRef.current) {
+        audioRef.current.removeAttribute("src");
+        audioRef.current.load();
+      }
+      setRecordedBlob(null);
+      setAudioUrl(null);
+      setPlaybackReady(false);
       chunksRef.current = [];
+      dataAvailableCountRef.current = 0;
       setElapsedSeconds(0);
+      setAiConsent(false);
+      setAiAnalysisStatus("idle");
+      setAiAnalysisResult(null);
+      setAiAnalysisError("");
       setDistributionStatus("draft");
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log("mic stream acquired");
+      console.log("[Malgyeol] microphone stream created");
       streamRef.current = stream;
 
       const mimeType = getSupportedMimeType();
+      console.log("[Malgyeol] selected recorder mime type:", mimeType ?? "browser default");
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      console.log("[Malgyeol] recorder state:", recorder.state);
       recorder.ondataavailable = (event) => {
+        dataAvailableCountRef.current += 1;
         console.log("dataavailable", event.data.size);
+        console.log("[Malgyeol] dataavailable", {
+          count: dataAvailableCountRef.current,
+          size: event.data.size,
+          type: event.data.type,
+        });
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
         }
@@ -264,9 +377,12 @@ function DemoCareBody() {
         stopTimer();
         setIsRecording(false);
         console.log("chunks length", chunksRef.current.length);
+        console.log("[Malgyeol] dataavailable count:", dataAvailableCountRef.current);
         if (chunksRef.current.length === 0) {
           setErrorMessage("녹음 데이터가 생성되지 않았습니다. 마이크 입력 장치와 브라우저 녹음 지원 여부를 확인한 뒤 다시 시도해 주세요.");
+          setRecordedBlob(null);
           setAudioUrl(null);
+          setPlaybackReady(false);
           stopStream();
           mediaRecorderRef.current = null;
           return;
@@ -274,9 +390,16 @@ function DemoCareBody() {
 
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         console.log("blob size", blob.size);
+        console.log("blob type", blob.type);
+        console.log("[Malgyeol] final blob", {
+          size: blob.size,
+          type: blob.type,
+        });
         if (blob.size === 0) {
           setErrorMessage("녹음 데이터가 생성되지 않았습니다. 마이크 입력 장치와 브라우저 녹음 지원 여부를 확인한 뒤 다시 시도해 주세요.");
+          setRecordedBlob(null);
           setAudioUrl(null);
+          setPlaybackReady(false);
           stopStream();
           mediaRecorderRef.current = null;
           return;
@@ -284,15 +407,20 @@ function DemoCareBody() {
 
         const url = URL.createObjectURL(blob);
         console.log("audio url created", url);
+        console.log("[Malgyeol] audio object URL:", url);
+        audioUrlRef.current = url;
+        setRecordedBlob(blob);
         setAudioUrl(url);
+        setPlaybackReady(false);
         setErrorMessage("");
-        stopStream();
         mediaRecorderRef.current = null;
       };
 
       mediaRecorderRef.current = recorder;
       recorder.start(250);
       console.log("recorder started");
+      console.log("[Malgyeol] recorder state:", recorder.state);
+      console.log("[Malgyeol] recorder started");
       setIsRecording(true);
       timerRef.current = window.setInterval(() => {
         setElapsedSeconds((value) => value + 1);
@@ -308,10 +436,62 @@ function DemoCareBody() {
   function stopRecording() {
     const recorder = mediaRecorderRef.current;
     if (recorder?.state === "recording") {
+      console.log("[Malgyeol] recorder stopping from state:", recorder.state);
+      try {
+        recorder.requestData();
+        console.log("[Malgyeol] recorder requestData called before stop");
+      } catch (error) {
+        console.warn("[Malgyeol] recorder requestData skipped", error);
+      }
       recorder.stop();
     }
     stopTimer();
     setIsRecording(false);
+  }
+
+  function getExpectedTextForAnalysis() {
+    if (selectedTask.id === "spontaneous") return "";
+    return selectedTask.prompt;
+  }
+
+  async function requestAiAnalysis() {
+    if (!recordedBlob) {
+      setAiAnalysisStatus("error");
+      setAiAnalysisError("녹음 파일이 없습니다. 먼저 녹음을 완료해 주세요.");
+      return;
+    }
+    if (!aiConsent) {
+      setAiAnalysisStatus("error");
+      setAiAnalysisError("AI 분석 전송에 동의한 뒤 다시 시도해 주세요.");
+      return;
+    }
+
+    setAiAnalysisStatus("uploading");
+    setAiAnalysisError("");
+    setAiAnalysisResult(null);
+
+    const form = new FormData();
+    form.append("audio", recordedBlob, `malgyeol-${selectedTask.id}.webm`);
+    form.append("taskId", selectedTask.id);
+    form.append("taskType", selectedTask.title);
+    form.append("expectedText", getExpectedTextForAnalysis());
+    form.append("consent", "true");
+
+    try {
+      const response = await fetch("/api/speech-analysis", {
+        method: "POST",
+        body: form,
+      });
+      const data = await response.json();
+      if (!response.ok || data.success !== true) {
+        throw new Error(typeof data.error === "string" ? data.error : "AI 음성 분석 요청에 실패했습니다.");
+      }
+      setAiAnalysisResult(data as SpeechAnalysisResponse);
+      setAiAnalysisStatus("success");
+    } catch (error) {
+      setAiAnalysisStatus("error");
+      setAiAnalysisError(error instanceof Error ? error.message : "AI 음성 분석 요청에 실패했습니다.");
+    }
   }
 
   function playVoiceGuide() {
@@ -563,10 +743,49 @@ function DemoCareBody() {
           {audioUrl && (
             <div className="mt-4">
               <p className="mb-2 text-xs font-bold text-ink-faint">녹음 재생 플레이어</p>
-              <audio className="h-10 w-full" controls src={audioUrl} />
+              <audio ref={audioRef} key={audioUrl} className="h-10 w-full" controls src={audioUrl} preload="metadata" playsInline />
             </div>
           )}
           {errorMessage && <p className="mt-3 text-xs font-semibold text-warn">{errorMessage}</p>}
+
+          <div className="mt-5 rounded-xl border border-line bg-white px-4 py-4">
+            <label className="flex gap-3 text-sm font-semibold leading-6 text-ink-soft">
+              <input
+                type="checkbox"
+                checked={aiConsent}
+                onChange={(event) => setAiConsent(event.target.checked)}
+                disabled={!recordedBlob || aiAnalysisStatus === "uploading"}
+                className="mt-1 h-4 w-4 accent-[#0f9aa8]"
+              />
+              <span>
+                AI 음성 분석을 위해 이번 녹음을 외부 AI API로 전송하는 것에 동의합니다.
+              </span>
+            </label>
+            <p className="mt-2 text-xs font-semibold leading-5 text-ink-faint">
+              기본 녹음과 재생은 브라우저에서 처리됩니다. AI 분석을 선택하면 이번 녹음이 음성인식 처리를 위해 외부 AI API로 전송됩니다. 말결 서비스는 본 데모에서 녹음 파일을 별도로 저장하지 않습니다.
+            </p>
+            <button
+              type="button"
+              onClick={requestAiAnalysis}
+              disabled={!canRequestAiAnalysis}
+              className="mt-3 rounded-lg bg-accent px-4 py-2 text-sm font-bold text-white hover:bg-accent-deep disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {aiAnalysisStatus === "uploading" ? "AI 음성 분석 중" : "AI 음성 분석 시작"}
+            </button>
+            {aiAnalysisStatus === "idle" && (
+              <p className="mt-3 text-xs font-semibold text-ink-faint">
+                아직 AI 음성 분석을 실행하지 않았습니다.
+              </p>
+            )}
+            {aiAnalysisStatus === "uploading" && (
+              <p className="mt-3 text-xs font-semibold text-ink-soft">
+                녹음된 음성을 AI 음성인식 API로 분석하고 있습니다.
+              </p>
+            )}
+            {aiAnalysisStatus === "error" && (
+              <p className="mt-3 text-xs font-semibold text-warn">{aiAnalysisError}</p>
+            )}
+          </div>
         </Card>
       </section>
 
@@ -574,23 +793,75 @@ function DemoCareBody() {
       <section className="grid gap-4 lg:grid-cols-2">
         <Card className="bg-white/95">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Eyebrow>데모용 예시 지표</Eyebrow>
-            <Pill tone="teal">mock 비진단 음성지표</Pill>
+            <Eyebrow>AI 음성인식 참고 결과</Eyebrow>
+            <Pill tone={aiAnalysisStatus === "success" ? "teal" : aiAnalysisStatus === "error" ? "warn" : "grey"}>
+              {aiAnalysisStatus === "success" ? "분석 완료" : aiAnalysisStatus === "uploading" ? "분석 중" : "대기"}
+            </Pill>
           </div>
           <p className="mb-3 rounded-lg border border-[#f6d58f]/35 bg-[#fff8e7] px-3 py-2 text-xs font-bold leading-5 text-[#6b4a0b]">
-            {MOCK_METRIC_NOTICE}
+            AI 음성인식 결과는 API 분석을 실행한 뒤 표시됩니다.
           </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {mockMetricByTask[selectedTask.id].map(([label, value]) => (
-              <div key={label} className="rounded-lg border border-line bg-ground px-3 py-2">
-                <p className="text-xs text-ink-faint">{label}</p>
-                <p className="mt-1 text-sm font-extrabold text-ink">{value}</p>
+          {aiAnalysisStatus !== "success" || !aiAnalysisResult ? (
+            <p className="rounded-lg border border-line bg-ground px-3 py-3 text-sm font-semibold leading-6 text-ink-soft">
+              아직 AI 음성 분석을 실행하지 않았습니다. 동의 후 버튼을 누르면 이번 녹음에 대한 음성인식 참고 결과가 표시됩니다.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              <div className="rounded-lg border border-line bg-ground px-3 py-3">
+                <p className="text-xs font-bold text-ink-faint">AI 전사 결과</p>
+                <p className="mt-2 text-sm font-semibold leading-6 text-ink">{aiAnalysisResult.transcript}</p>
               </div>
-            ))}
-          </div>
-          <p className="mt-3 text-xs font-semibold text-ink-faint">
-            AI 보조 지표 예정 영역입니다. 현재는 치료사 검수 참고자료 예시만 표시합니다.
-          </p>
+              {aiAnalysisResult.expectedText && (
+                <div className="rounded-lg border border-line bg-ground px-3 py-3">
+                  <p className="text-xs font-bold text-ink-faint">제시문</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-ink-soft">{aiAnalysisResult.expectedText}</p>
+                </div>
+              )}
+              {aiAnalysisResult.comparison.referenceMatchPercent !== null && (
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs text-ink-faint">제시문 참고 일치율</p>
+                    <p className="mt-1 text-sm font-extrabold text-ink">
+                      {aiAnalysisResult.comparison.referenceMatchPercent}%
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs text-ink-faint">일치 토큰</p>
+                    <p className="mt-1 text-sm font-extrabold text-ink">
+                      {aiAnalysisResult.comparison.matchedTokenCount}/{aiAnalysisResult.comparison.expectedTokenCount}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-line bg-white px-3 py-2">
+                    <p className="text-xs text-ink-faint">사용 모델</p>
+                    <p className="mt-1 text-sm font-extrabold text-ink">{aiAnalysisResult.model}</p>
+                  </div>
+                </div>
+              )}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg border border-line bg-white px-3 py-3">
+                  <p className="text-xs font-bold text-ink-faint">빠진 것으로 보이는 표현</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-ink-soft">
+                    {aiAnalysisResult.comparison.omittedTokens.length
+                      ? aiAnalysisResult.comparison.omittedTokens.join(" ")
+                      : "표시할 항목 없음"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-line bg-white px-3 py-3">
+                  <p className="text-xs font-bold text-ink-faint">추가로 인식된 표현</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-ink-soft">
+                    {aiAnalysisResult.comparison.addedTokens.length
+                      ? aiAnalysisResult.comparison.addedTokens.join(" ")
+                      : "표시할 항목 없음"}
+                  </p>
+                </div>
+              </div>
+              <ul className="grid gap-1 text-xs font-semibold leading-5 text-ink-faint">
+                {aiAnalysisResult.notices.map((notice) => (
+                  <li key={notice}>{notice}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <p className="mt-3 rounded-lg border border-line bg-ground px-3 py-2 text-xs font-semibold leading-5 text-ink-soft">
             {DISCLAIMER}
           </p>

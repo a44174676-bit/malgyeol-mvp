@@ -14,6 +14,7 @@ export function proxy(request: NextRequest) {
     pathname.startsWith("/login") ||
     pathname.startsWith("/portal") ||
     pathname.startsWith("/korean/portal") ||
+    pathname.startsWith("/api/speech-analysis") ||
     pathname.startsWith("/api/upload") ||
     pathname.startsWith("/api/korean/upload") ||
     pathname.startsWith("/api/audio");
