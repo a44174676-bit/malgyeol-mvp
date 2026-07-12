@@ -7,16 +7,214 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum AppUserRole {
+  PATIENT
+  CAREGIVER
+  THERAPIST
+  ADMIN
+}
+
+enum AppUserStatus {
+  ACTIVE
+  INACTIVE
+  DELETED
+}
+
+enum TherapistType {
+  SPEECH_LANGUAGE_PATHOLOGIST
+  CLINICAL_SPECIALIST
+  ADMIN_REVIEWER
+  OTHER
+}
+
+enum CareConnectionStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum CareTaskType {
+  VOWEL
+  AMR
+  SMR
+  WORD
+  SENTENCE
+  PARAGRAPH
+  SPONTANEOUS
+  SCENARIO
+  OTHER
+}
+
+enum CareTaskStatus {
+  DRAFT
+  ASSIGNED
+  IN_PROGRESS
+  SUBMITTED
+  REVIEWED
+  ARCHIVED
+}
+
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  REVIEWED
+  RESUBMIT_REQUESTED
+  WITHDRAWN
+  DELETED
+}
+
+enum AutoAnalysisStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ExpertReviewStatus {
+  PENDING
+  IN_REVIEW
+  COMPLETED
+  RESUBMIT_REQUESTED
+}
+
+enum ReviewValidity {
+  NOT_REVIEWED
+  VALID
+  LIMITED
+  INVALID
+}
+
+enum PatientFeedbackStatus {
+  DRAFT
+  SENT
+  READ
+  WITHDRAWN
+}
+
+enum ConsentType {
+  AI_AUDIO_PROCESSING
+  EXPERT_AUDIO_SHARING
+  AUDIO_STORAGE
+  CAREGIVER_ACCESS
+  RESEARCH_USE
+}
+
+model AppUser {
+  id               String                @id @default(cuid())
+  role             AppUserRole
+  displayName      String?
+  alias            String?
+  status           AppUserStatus         @default(ACTIVE)
+  deactivatedAt    DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  patientProfile   CarePatientProfile?
+  therapistProfile CareTherapistProfile?
+  consentRecords   ConsentRecord[]
+  auditLogs        AuditLog[]
+
+  @@index([role, status])
+  @@index([createdAt])
+}
+
+model CarePatientProfile {
+  id              String            @id @default(cuid())
+  userId          String            @unique
+  user            AppUser           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  legacyPatientId String?           @unique
+  legacyPatient   Patient?          @relation(fields: [legacyPatientId], references: [id], onDelete: SetNull)
+  patientCode     String?           @unique
+  alias           String?
+  status          AppUserStatus     @default(ACTIVE)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  connections     CareConnection[]
+  tasks           CareTask[]
+  feedbacks       PatientFeedback[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CareTherapistProfile {
+  id            String            @id @default(cuid())
+  userId        String            @unique
+  user          AppUser           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  displayName   String?
+  therapistType TherapistType     @default(SPEECH_LANGUAGE_PATHOLOGIST)
+  status        AppUserStatus     @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  connections   CareConnection[]
+  createdTasks  CareTask[]
+  expertReviews ExpertReview[]
+  feedbacks     PatientFeedback[]
+
+  @@index([therapistType, status])
+  @@index([createdAt])
+}
+
+model CareConnection {
+  id                 String               @id @default(cuid())
+  patientProfileId   String
+  patientProfile     CarePatientProfile   @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  therapistProfileId String
+  therapistProfile   CareTherapistProfile @relation(fields: [therapistProfileId], references: [id], onDelete: Restrict)
+  startedAt          DateTime             @default(now())
+  endedAt            DateTime?
+  status             CareConnectionStatus @default(PENDING)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  tasks              CareTask[]
+
+  @@index([patientProfileId, status])
+  @@index([therapistProfileId, status])
+  @@index([startedAt])
+}
+
+model CareTask {
+  id                   String               @id @default(cuid())
+  createdByTherapistId String
+  createdByTherapist   CareTherapistProfile @relation(fields: [createdByTherapistId], references: [id], onDelete: Restrict)
+  patientProfileId     String
+  patientProfile       CarePatientProfile   @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  connectionId         String?
+  connection           CareConnection?      @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  taskType             CareTaskType
+  title                String
+  targetText           String?
+  instructions         String?
+  repetitionTarget     Int?
+  assignedAt           DateTime?
+  dueAt                DateTime?
+  status               CareTaskStatus       @default(DRAFT)
+  previousTaskId       String?
+  previousTask         CareTask?            @relation("CareTaskSequence", fields: [previousTaskId], references: [id], onDelete: SetNull)
+  nextTasks            CareTask[]           @relation("CareTaskSequence")
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  careSubmissions      CareSubmission[]
+  feedbacks            PatientFeedback[]
+
+  @@index([patientProfileId, status])
+  @@index([createdByTherapistId])
+  @@index([connectionId])
+  @@index([dueAt])
+  @@index([createdAt])
+}
+
 model Patient {
-  id                String             @id @default(cuid())
-  serviceLine       String             @default("CARE")
+  id                String              @id @default(cuid())
+  serviceLine       String              @default("CARE")
   name              String
   birthYear         Int?
   gender            String?
   diagnosis         String
   memo              String?
-  portalToken       String             @unique @default(cuid())
-  createdAt         DateTime           @default(now())
+  portalToken       String              @unique @default(cuid())
+  createdAt         DateTime            @default(now())
   goals             Goal[]
   sessions          SessionNote[]
   prescriptions     Prescription[]
@@ -26,6 +224,7 @@ model Patient {
   standardScores    StandardScore[]
   observations      ObservationEntry[]
   dysarthriaTests   DysarthriaTest[]
+  careProfile       CarePatientProfile?
 }
 
 // 구음장애 선별 배터리 (MPT·AMR·SMR·문장·문단 연속 시행)
@@ -103,18 +302,18 @@ model SessionNote {
 }
 
 model Activity {
-  id          String             @id @default(cuid())
-  serviceLine String             @default("CARE")
-  title       String
-  area        String // 조음음운 | 언어 | 유창성 | 음성 | 실어증
-  level       String? // 낱말 | 문장 | 자발화 ...
-  format      String // RECORD(녹음 제출) | CHECK(체크형) | PLAY(놀이형)
-  description String?
-  dose        String? // "20문항 · 약 10분"
-  targetText  String? // 녹음형일 때 목표 발화 안내
-  metricKind  String? // MPT(연장발성) | DDK(교대운동) | READ(읽기/자발화) — 단말 내 지표 산출 방식
+  id            String             @id @default(cuid())
+  serviceLine   String             @default("CARE")
+  title         String
+  area          String // 조음음운 | 언어 | 유창성 | 음성 | 실어증
+  level         String? // 낱말 | 문장 | 자발화 ...
+  format        String // RECORD(녹음 제출) | CHECK(체크형) | PLAY(놀이형)
+  description   String?
+  dose          String? // "20문항 · 약 10분"
+  targetText    String? // 녹음형일 때 목표 발화 안내
+  metricKind    String? // MPT(연장발성) | DDK(교대운동) | READ(읽기/자발화) — 단말 내 지표 산출 방식
   goalCondition String? // 목표 수행 조건 (예: "8초 이상 유지")
-  items       PrescriptionItem[]
+  items         PrescriptionItem[]
 }
 
 model Prescription {
@@ -148,19 +347,155 @@ model Appointment {
 }
 
 model Submission {
-  id            String            @id @default(cuid())
-  patientId     String
-  patient       Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  itemId        String?
-  item          PrescriptionItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  targetText    String?
-  audioPath     String?
-  metricsJson   String? // 단말 내 산출된 비진단 음성지표 (특허 단계 ③)
-  qualityFlag   String? // OK | LOW (품질 조건 미충족 — 청구항 10)
-  judgment      String? // CORRECT | APPROX | WRONG (조음 과제용)
-  reviewOpinion String? // 검수 의견 유형 (수행 적절 등 — 청구항 7)
-  feedback      String?
+  id             String            @id @default(cuid())
+  patientId      String
+  patient        Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  itemId         String?
+  item           PrescriptionItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  targetText     String?
+  audioPath      String?
+  metricsJson    String? // 단말 내 산출된 비진단 음성지표 (특허 단계 ③)
+  qualityFlag    String? // OK | LOW (품질 조건 미충족 — 청구항 10)
+  judgment       String? // CORRECT | APPROX | WRONG (조음 과제용)
+  reviewOpinion  String? // 검수 의견 유형 (수행 적절 등 — 청구항 7)
+  feedback       String?
   reviewMetaJson String? // AI 참고 분석 Beta 후보와 치료사 검수 결과 JSON
-  createdAt     DateTime          @default(now())
-  reviewedAt    DateTime?
+  createdAt      DateTime          @default(now())
+  reviewedAt     DateTime?
+  careSubmission CareSubmission?
+  autoAnalyses   AutoAnalysis[]
+  expertReviews  ExpertReview[]
+  feedbacks      PatientFeedback[]
+
+  @@index([patientId])
+  @@index([itemId])
+  @@index([createdAt])
+}
+
+model CareSubmission {
+  id                   String           @id @default(cuid())
+  submissionId         String           @unique
+  submission           Submission       @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  careTaskId           String?
+  careTask             CareTask?        @relation(fields: [careTaskId], references: [id], onDelete: SetNull)
+  status               SubmissionStatus @default(DRAFT)
+  submittedAt          DateTime?
+  audioMimeType        String?
+  audioDurationSecond  Float?
+  aiAnalysisConsent    Boolean          @default(false)
+  expertSharingConsent Boolean          @default(false)
+  withdrawnAt          DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([careTaskId])
+  @@index([status])
+  @@index([submittedAt])
+  @@index([createdAt])
+}
+
+model AutoAnalysis {
+  id                  String             @id @default(cuid())
+  submissionId        String
+  submission          Submission         @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  transcript          String?
+  comparisonJson      String?
+  acousticMetricsJson String?
+  modelName           String?
+  analysisVersion     String?
+  status              AutoAnalysisStatus @default(PENDING)
+  completedAt         DateTime?
+  errorMessage        String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([submissionId])
+  @@index([status])
+  @@index([completedAt])
+  @@index([createdAt])
+}
+
+model ExpertReview {
+  id                       String                @id @default(cuid())
+  submissionId             String
+  submission               Submission            @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  therapistProfileId       String?
+  therapistProfile         CareTherapistProfile? @relation(fields: [therapistProfileId], references: [id], onDelete: SetNull)
+  status                   ExpertReviewStatus    @default(PENDING)
+  revisedTranscript        String?
+  correctedRepetitionCount Int?
+  validity                 ReviewValidity        @default(NOT_REVIEWED)
+  resubmissionRequested    Boolean               @default(false)
+  internalMemo             String?
+  patientVisibleComment    String?
+  completedAt              DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  feedbacks                PatientFeedback[]
+
+  @@index([submissionId])
+  @@index([therapistProfileId])
+  @@index([status])
+  @@index([completedAt])
+  @@index([createdAt])
+}
+
+model PatientFeedback {
+  id                 String                @id @default(cuid())
+  reviewId           String?
+  review             ExpertReview?         @relation(fields: [reviewId], references: [id], onDelete: SetNull)
+  submissionId       String?
+  submission         Submission?           @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  patientProfileId   String
+  patientProfile     CarePatientProfile    @relation(fields: [patientProfileId], references: [id], onDelete: Restrict)
+  therapistProfileId String?
+  therapistProfile   CareTherapistProfile? @relation(fields: [therapistProfileId], references: [id], onDelete: SetNull)
+  title              String?
+  body               String
+  nextTaskId         String?
+  nextTask           CareTask?             @relation(fields: [nextTaskId], references: [id], onDelete: SetNull)
+  status             PatientFeedbackStatus @default(DRAFT)
+  sentAt             DateTime?
+  readAt             DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([patientProfileId, status])
+  @@index([therapistProfileId])
+  @@index([submissionId])
+  @@index([reviewId])
+  @@index([nextTaskId])
+  @@index([sentAt])
+  @@index([createdAt])
+}
+
+model ConsentRecord {
+  id              String      @id @default(cuid())
+  userId          String?
+  user            AppUser?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  consentType     ConsentType
+  documentVersion String
+  consented       Boolean
+  consentedAt     DateTime    @default(now())
+  withdrawnAt     DateTime?
+  createdAt       DateTime    @default(now())
+
+  @@index([userId, consentType])
+  @@index([consentedAt])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  actorUser    AppUser? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actionType   String
+  targetModel  String
+  targetId     String
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([targetModel, targetId])
+  @@index([createdAt])
 }

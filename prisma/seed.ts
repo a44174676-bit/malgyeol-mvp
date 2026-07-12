@@ -25,6 +25,17 @@ function todayAt(hour: number, minute = 0): Date {
 }
 
 async function main() {
+  await db.patientFeedback.deleteMany();
+  await db.expertReview.deleteMany();
+  await db.autoAnalysis.deleteMany();
+  await db.careSubmission.deleteMany();
+  await db.careTask.deleteMany();
+  await db.careConnection.deleteMany();
+  await db.carePatientProfile.deleteMany();
+  await db.careTherapistProfile.deleteMany();
+  await db.consentRecord.deleteMany();
+  await db.auditLog.deleteMany();
+  await db.appUser.deleteMany();
   await db.submission.deleteMany();
   await db.prescriptionItem.deleteMany();
   await db.prescription.deleteMany();
@@ -425,6 +436,137 @@ async function main() {
       { patientId: minjun.id, at: todayAt(15), kind: "대면", memo: "부모 평정 검토" },
       { patientId: yeongja.id, at: todayAt(16, 30), kind: "원격", memo: "강도 훈련" },
     ],
+  });
+
+  const demoPatientRecord = await db.patient.create({
+    data: {
+      serviceLine: "CARE",
+      name: "Demo Patient",
+      diagnosis: "Demo placeholder",
+      memo: "Fictional Care workflow seed. No real patient data or audio file.",
+    },
+  });
+  const demoPatientUser = await db.appUser.create({
+    data: {
+      role: "PATIENT",
+      alias: "demo-patient",
+      status: "ACTIVE",
+    },
+  });
+  const demoTherapistUser = await db.appUser.create({
+    data: {
+      role: "THERAPIST",
+      alias: "demo-therapist",
+      status: "ACTIVE",
+    },
+  });
+  const demoPatientProfile = await db.carePatientProfile.create({
+    data: {
+      userId: demoPatientUser.id,
+      legacyPatientId: demoPatientRecord.id,
+      patientCode: "demo-patient",
+      alias: "demo-patient",
+      status: "ACTIVE",
+    },
+  });
+  const demoTherapistProfile = await db.careTherapistProfile.create({
+    data: {
+      userId: demoTherapistUser.id,
+      displayName: "demo-therapist",
+      therapistType: "SPEECH_LANGUAGE_PATHOLOGIST",
+      status: "ACTIVE",
+    },
+  });
+  const demoConnection = await db.careConnection.create({
+    data: {
+      patientProfileId: demoPatientProfile.id,
+      therapistProfileId: demoTherapistProfile.id,
+      status: "ACTIVE",
+    },
+  });
+  const demoTask = await db.careTask.create({
+    data: {
+      createdByTherapistId: demoTherapistProfile.id,
+      patientProfileId: demoPatientProfile.id,
+      connectionId: demoConnection.id,
+      taskType: "AMR",
+      title: "Demo AMR task",
+      targetText: "퍼퍼퍼 터터터 커커커",
+      instructions: "Fictional seed task for relationship validation only.",
+      repetitionTarget: 3,
+      assignedAt: todayAt(9),
+      dueAt: todayAt(23, 59),
+      status: "ASSIGNED",
+    },
+  });
+  const demoSubmission = await db.submission.create({
+    data: {
+      patientId: demoPatientRecord.id,
+      targetText: "퍼퍼퍼 터터터 커커커",
+      createdAt: todayAt(9, 5),
+    },
+  });
+  await db.careSubmission.create({
+    data: {
+      submissionId: demoSubmission.id,
+      careTaskId: demoTask.id,
+      status: "SUBMITTED",
+      submittedAt: todayAt(9, 5),
+      aiAnalysisConsent: false,
+      expertSharingConsent: false,
+    },
+  });
+  await db.autoAnalysis.create({
+    data: {
+      submissionId: demoSubmission.id,
+      modelName: "demo-none",
+      analysisVersion: "care-workflow-foundation-v1",
+      status: "PENDING",
+    },
+  });
+  const demoReview = await db.expertReview.create({
+    data: {
+      submissionId: demoSubmission.id,
+      therapistProfileId: demoTherapistProfile.id,
+      status: "PENDING",
+      validity: "NOT_REVIEWED",
+    },
+  });
+  await db.patientFeedback.create({
+    data: {
+      reviewId: demoReview.id,
+      submissionId: demoSubmission.id,
+      patientProfileId: demoPatientProfile.id,
+      therapistProfileId: demoTherapistProfile.id,
+      title: "Demo feedback draft",
+      body: "Fictional draft feedback. Not sent to a real user.",
+      status: "DRAFT",
+    },
+  });
+  await db.consentRecord.createMany({
+    data: [
+      {
+        userId: demoPatientUser.id,
+        consentType: "AI_AUDIO_PROCESSING",
+        documentVersion: "demo-v0",
+        consented: false,
+      },
+      {
+        userId: demoPatientUser.id,
+        consentType: "EXPERT_AUDIO_SHARING",
+        documentVersion: "demo-v0",
+        consented: false,
+      },
+    ],
+  });
+  await db.auditLog.create({
+    data: {
+      actorUserId: demoTherapistUser.id,
+      actionType: "SEED_RELATIONSHIP_CREATED",
+      targetModel: "CareTask",
+      targetId: demoTask.id,
+      metadataJson: JSON.stringify({ seed: true, containsPersonalData: false }),
+    },
   });
 
   console.log("Seed 완료");
